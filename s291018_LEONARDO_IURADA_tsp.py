@@ -5,15 +5,12 @@
 import logging
 from math import sqrt
 from typing import Any
-from typing_extensions import final
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 
-from collections import deque
-
-NUM_CITIES = 23
-STEADY_STATE = 1000
+NUM_CITIES = 42
+STEADY_STATE = 200
 
 class Tsp:
 
@@ -58,85 +55,82 @@ class Tsp:
     def graph(self) -> nx.digraph:
         return self._graph
 
-def tweak(solution: np.array, *, pm: float = .1) -> np.array:
-    new_solution = solution.copy()
-    p = None
-    while p is None or p < pm:
-        i1 = np.random.randint(0, solution.shape[0])
-        i2 = np.random.randint(0, solution.shape[0])
-        temp = new_solution[i1]
-        new_solution[i1] = new_solution[i2]
-        new_solution[i2] = temp
-        p = np.random.random()
-    return new_solution
+def tweak(problem, path, temperature, t_pow=1.0, dist_pow=3.0):
+
+    #! We need to select next city in some way
+    probability = 0.0
+    total_distance = 0.0
+
+    not_visited = [city for city in range(NUM_CITIES) if city not in path]
+    for city in not_visited:
+        total_distance += problem.distance(path[-1], city)
+    for city in not_visited:
+        probability += temperature[path[-1], city]**t_pow * (total_distance / problem.distance(path[-1], city))**dist_pow
+    
+    pm = np.random.uniform(0.0, probability)
+    p = 0.0
+    for city in not_visited:
+        p += temperature[path[-1], city]**t_pow * (total_distance / problem.distance(path[-1], city))**dist_pow
+        if p >= pm:
+            return city
 
 def main():
 
+    POPULATION_SIZE = 5
+
+    T_DECAY = 0.8
+    T_POW = 1.0
+    T_ADD = 1.0
+    DIST_POW = 3.0
+
     problem = Tsp(NUM_CITIES)
 
-    num_instances = 1000
+    temperature = np.ones((NUM_CITIES, NUM_CITIES), dtype=np.float32)
 
-    #problem.plot(solution)
-#    steady_state = 0
-#    step = 0
-#    while steady_state < STEADY_STATE:
-#        step += 1
-#        steady_state += 1
-#        new_solution = tweak(solution, pm=.5)
-#        new_solution_cost = problem.evaluate_solution(new_solution)
-#        if new_solution_cost < solution_cost:
-#            solution = new_solution
-#            solution_cost = new_solution_cost
-#            history.append((step, solution_cost))
-#            steady_state = 0
+    best_path = None
+    best_distance = np.inf
 
-    DES_POW = 2.6
-    PHERO_POW = 10
+    steady_state = 0
+    step = 0
 
-    final_solution = None
-    final_sol_cost = np.inf
+    while steady_state < STEADY_STATE:
+        steady_state += 1
+        step += 1
+        for individual in range(POPULATION_SIZE):
 
-    phero = np.array([0 for 0 in range(NUM_CITIES)])
+            #! Find path
+            path = [np.random.randint(0, NUM_CITIES)]
+            while len(path) < NUM_CITIES:
+                path.append(tweak(problem, path, temperature, t_pow=T_POW, dist_pow=DIST_POW))
+            path = np.array(path)
 
-    for _ in range(num_instances):
+            #! Compute distance
+            distance = problem.evaluate_solution(path)
 
-        solution = np.array(range(NUM_CITIES))
-        np.random.shuffle(solution)
-        solution_cost = problem.evaluate_solution(solution)
+            #! Add temperature
+            temp_add = 1.0 / distance
+            for i in range(NUM_CITIES):
+                temperature[path[i], path[(i+1) % NUM_CITIES]] += T_ADD * temp_add
 
-        new_solution = np.array([solution[0]])
-        solution = solution[1:]
+            #! Check if better
+            if distance < best_distance:
+                best_distance = distance
+                best_path = path
 
-        current_city = new_solution[-1]
+                steady_state = 0
+        
+        #! Add temperature
+        temp_add = 1.0 / best_distance
+        for i in range(NUM_CITIES):
+            temperature[best_path[i], best_path[(i+1) % NUM_CITIES]] += T_ADD * temp_add
+            
+        #! Cool down temperature
+        for i in range(NUM_CITIES):
+            for j in range(NUM_CITIES):
+                temperature[i,j] *= T_DECAY
 
-        while len(solution):
-            distances = np.array([problem.distance(current_city, city) for city in solution], dtype=np.float32)
-
-            desirability = np.array([(1 / d)**DES_POW for d in distances], dtype=np.float32) 
-            phero = np.array()
-
-            # We weight based on desirability and pheromone
-            distances *= desirability
-
-            norm_dist = distances.sum()
-            probabilities = np.array([d / norm_dist for d in distances], dtype=np.float32)
-
-            next_city = np.random.choice(solution, 1, p=probabilities)
-            new_solution = np.append(new_solution, next_city)
-
-            solution = np.delete(solution, np.where(solution == next_city))
-
-            current_city = next_city[0]
-
-        new_sol_cost = problem.evaluate_solution(new_solution) 
-
-        if final_solution is None or new_sol_cost < final_sol_cost:
-            final_solution = new_solution.copy()
-            final_sol_cost = new_sol_cost
-
-    print(final_sol_cost)
-    problem.plot(final_solution)
-
+    print(f'\nBest distance found: {best_distance:,} in {step} steps\n')
+    problem.plot(best_path)
 
 if __name__ == '__main__':
     logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%H:%M:%S')
